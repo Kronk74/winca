@@ -28,6 +28,27 @@ Options:
         --skipVerify   Skip SSL verification
 ````
 
+Print the help page with `winca renew-all -h`:
+
+````bash
+main renew-all [--username=string] [--password=string] [--outExt=string] [--skipVerify] <csrDir> <outDir> <apiUrl> <template>
+
+Description:
+    Renew all certificates from a directory
+
+Arguments:
+    csrDir             Path of existing CSR files on disk
+    outDir             The certificate output directory path
+    apiUrl             The api url
+    template           The certificate template to use
+
+Options:
+    -u, --username     The user context to issue the certificate with
+    -p, --password     The password
+    -o, --outExt       Extension name output
+        --skipVerify   Skip SSL verification
+````
+
 ### Example
 
 ````bash

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -213,6 +214,62 @@ func getCertificateAction(args []string, options map[string]string) int {
 	return 0
 }
 
+func renewAllCertificate(args []string, options map[string]string) int {
+	var csrFile = regexp.MustCompile(`\.csr$`)
+	csrDir := args[0]
+
+	outDir, url, tpl := args[1], args[2], args[3]
+	username, password := options["username"], options["password"]
+	outExt := options["outExt"]
+
+	if username == "" || password == "" {
+		username, password = getCredentials()
+	}
+	if outExt == "" {
+		outExt = "cer"
+	}
+
+	cred := &Credentials{Username: username, Password: password}
+
+	skipVerify, _ := strconv.ParseBool(options["skipVerify"])
+	tr := ntlmssp.Negotiator{
+		RoundTripper: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify},
+		},
+	}
+
+	client := &http.Client{Transport: tr}
+
+	files, err := ioutil.ReadDir(string(csrDir))
+	if err != nil {
+		panic(err)
+	}
+
+	nbrOfCert := 0
+	for _, f := range files {
+		fileName := f.Name()
+		fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
+		if csrFile.Match([]byte(f.Name())) {
+			nbrOfCert++
+			csr, loadCsrErr := LoadCsr(f.Name())
+			check(loadCsrErr)
+			fmt.Printf("Requesting certificate... %s ", f.Name())
+
+			id, requestErr := RequestCertificate(client, url, tpl, csr, cred)
+			check(requestErr)
+
+			cert, downloadErr := DownloadCertificate(client, id, url, cred)
+			check(downloadErr)
+
+			err := writeCertificate(outDir+fileName+"."+outExt, cert)
+			check(err)
+			fmt.Printf("\tDone\n")
+		}
+	}
+	fmt.Printf("%d certifcated generated", nbrOfCert)
+	return 0
+}
+
 func main() {
 	get := cli.NewCommand("get", "Get a new certificate").WithShortcut("g").
 		WithArg(cli.NewArg("csrPath", "A path to an existing CSR file on disk")).
@@ -224,8 +281,20 @@ func main() {
 		WithOption(cli.NewOption("skipVerify", "Skip SSL verification").WithType(cli.TypeBool)).
 		WithAction(getCertificateAction)
 
+	renewall := cli.NewCommand("renew-all", "Renew all certificates from a directory").WithShortcut("r").
+		WithArg(cli.NewArg("csrDir", "Path of existing CSR files on disk")).
+		WithArg(cli.NewArg("outDir", "The certificate output directory path")).
+		WithArg(cli.NewArg("apiUrl", "The api url")).
+		WithArg(cli.NewArg("template", "The certificate template to use")).
+		WithOption(cli.NewOption("username", "The user context to issue the certificate with").WithChar('u')).
+		WithOption(cli.NewOption("password", "The password").WithChar('p')).
+		WithOption(cli.NewOption("outExt", "Extension name output").WithChar('o')).
+		WithOption(cli.NewOption("skipVerify", "Skip SSL verification").WithType(cli.TypeBool)).
+		WithAction(renewAllCertificate)
+
 	app := cli.New("Request and download a new certificate from a Windows CA").
-		WithCommand(get)
+		WithCommand(get).
+		WithCommand(renewall)
 
 	os.Exit(app.Run(os.Args, os.Stdout))
 }
