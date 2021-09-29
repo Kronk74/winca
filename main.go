@@ -17,10 +17,10 @@ import (
 	"strings"
 	"syscall"
 
-	"golang.org/x/crypto/ssh/terminal"
-
 	"github.com/Azure/go-ntlmssp"
+	"github.com/hashicorp/vault/api"
 	"github.com/teris-io/cli"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 const (
@@ -176,14 +176,25 @@ func LoadCsr(path string) ([]byte, error) {
 }
 
 func getCertificateAction(args []string, options map[string]string) int {
+	filename := strings.TrimSuffix(args[0], filepath.Ext(args[0]))
 	csr, loadCsrErr := LoadCsr(args[0])
 	check(loadCsrErr)
 
 	out, url, tpl := args[1], args[2], args[3]
 	username, password := options["username"], options["password"]
+	outExt := options["outExt"]
 
-	if username == "" || password == "" {
-		username, password = getCredentials()
+	if os.Getenv("WINCA_USERNAME") != "" && os.Getenv("WINCA_PASSWORD") != "" {
+		options["username"] = strings.TrimSpace(os.Getenv("WINCA_USERNAME"))
+		options["password"] = strings.TrimSpace(os.Getenv("WINCA_PASSWORD"))
+	} else if username == "" || password == "" {
+		options["username"], options["password"] = getCredentials()
+	} else {
+		options["username"] = strings.TrimSpace(username)
+		options["password"] = strings.TrimSpace(password)
+	}
+	if outExt == "" {
+		outExt = "cer"
 	}
 
 	cred := &Credentials{Username: username, Password: password}
@@ -208,7 +219,7 @@ func getCertificateAction(args []string, options map[string]string) int {
 	cert, downloadErr := DownloadCertificate(client, id, url, cred)
 	check(downloadErr)
 
-	err := writeCertificate(out, cert)
+	err := writeCertificate(out+filename+"."+outExt, cert)
 	check(err)
 
 	return 0
@@ -218,27 +229,19 @@ func renewAllCertificate(args []string, options map[string]string) int {
 	var csrFile = regexp.MustCompile(`\.csr$`)
 	csrDir := args[0]
 
-	outDir, url, tpl := args[1], args[2], args[3]
 	username, password := options["username"], options["password"]
-	outExt := options["outExt"]
 
-	if username == "" || password == "" {
-		username, password = getCredentials()
-	}
-	if outExt == "" {
-		outExt = "cer"
-	}
-
-	cred := &Credentials{Username: username, Password: password}
-
-	skipVerify, _ := strconv.ParseBool(options["skipVerify"])
-	tr := ntlmssp.Negotiator{
-		RoundTripper: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipVerify},
-		},
+	if os.Getenv("WINCA_USERNAME") != "" && os.Getenv("WINCA_PASSWORD") != "" {
+		options["username"] = strings.TrimSpace(os.Getenv("WINCA_USERNAME"))
+		options["password"] = strings.TrimSpace(os.Getenv("WINCA_PASSWORD"))
+	} else if username == "" || password == "" {
+		options["username"], options["password"] = getCredentials()
+	} else {
+		options["username"] = strings.TrimSpace(username)
+		options["password"] = strings.TrimSpace(password)
 	}
 
-	client := &http.Client{Transport: tr}
+	outDir, url, tpl := args[1], args[2], args[3]
 
 	files, err := ioutil.ReadDir(string(csrDir))
 	if err != nil {
@@ -248,25 +251,55 @@ func renewAllCertificate(args []string, options map[string]string) int {
 	nbrOfCert := 0
 	for _, f := range files {
 		fileName := f.Name()
-		fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
 		if csrFile.Match([]byte(f.Name())) {
 			nbrOfCert++
-			csr, loadCsrErr := LoadCsr(f.Name())
-			check(loadCsrErr)
 			fmt.Printf("Requesting certificate... %s ", f.Name())
-
-			id, requestErr := RequestCertificate(client, url, tpl, csr, cred)
-			check(requestErr)
-
-			cert, downloadErr := DownloadCertificate(client, id, url, cred)
-			check(downloadErr)
-
-			err := writeCertificate(outDir+fileName+"."+outExt, cert)
-			check(err)
-			fmt.Printf("\tDone\n")
+			args_cert := []string{fileName, outDir, url, tpl}
+			getCertificateAction(args_cert, options)
 		}
 	}
 	fmt.Printf("%d certifcated generated", nbrOfCert)
+	return 0
+}
+
+func pushToVault(args []string, options map[string]string) int {
+	vault_addr := os.Getenv("VAULT_ADDR")
+	token := os.Getenv("VAULT_TOKEN")
+	key := args[1]
+
+	client, err := api.NewClient(api.DefaultConfig())
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	client.SetAddress(vault_addr)
+	client.SetToken(token)
+
+	secret, err := client.Logical().Read(key)
+	if err != nil {
+		fmt.Println(err)
+		return 2
+	}
+
+	data := make(map[string]interface{})
+	data["data"] = map[string]interface{}{
+		"value": "test",
+	}
+	secrets, err := client.Logical().Write(key, data)
+	if err != nil {
+		fmt.Println(err)
+	}
+	if secrets == nil {
+		fmt.Println("empty response from credential provider")
+	}
+
+	m, ok := secret.Data["data"].(map[string]interface{})
+	if !ok {
+		fmt.Printf("%T %#v\n", secret.Data["data"], secret.Data["data"])
+		return 3
+	}
+	fmt.Printf("hello: %v\n", m)
+
 	return 0
 }
 
@@ -278,10 +311,11 @@ func main() {
 		WithArg(cli.NewArg("template", "The certificate template to use")).
 		WithOption(cli.NewOption("username", "The user context to issue the certificate with").WithChar('u')).
 		WithOption(cli.NewOption("password", "The password").WithChar('p')).
+		WithOption(cli.NewOption("outExt", "Extension name output").WithChar('o')).
 		WithOption(cli.NewOption("skipVerify", "Skip SSL verification").WithType(cli.TypeBool)).
 		WithAction(getCertificateAction)
 
-	renewall := cli.NewCommand("renew-all", "Renew all certificates from a directory").WithShortcut("r").
+	renewall := cli.NewCommand("renew-all", "Renew all certificates from a directory").WithShortcut("ra").
 		WithArg(cli.NewArg("csrDir", "Path of existing CSR files on disk")).
 		WithArg(cli.NewArg("outDir", "The certificate output directory path")).
 		WithArg(cli.NewArg("apiUrl", "The api url")).
@@ -292,9 +326,15 @@ func main() {
 		WithOption(cli.NewOption("skipVerify", "Skip SSL verification").WithType(cli.TypeBool)).
 		WithAction(renewAllCertificate)
 
+	pushtovault := cli.NewCommand("push-to-vault", "Push certificates from a directory to vault").WithShortcut("ptv").
+		WithArg(cli.NewArg("cert_path", "The certificate path to push")).
+		WithArg(cli.NewArg("secret_path", "Secret vault path")).
+		WithAction(pushToVault)
+
 	app := cli.New("Request and download a new certificate from a Windows CA").
 		WithCommand(get).
-		WithCommand(renewall)
+		WithCommand(renewall).
+		WithCommand(pushtovault)
 
 	os.Exit(app.Run(os.Args, os.Stdout))
 }
