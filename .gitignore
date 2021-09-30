@@ -1,1 +1,6 @@
 .bin/
+.envrc.local
+*.cer
+*.crt
+*.csr
+*.pem
