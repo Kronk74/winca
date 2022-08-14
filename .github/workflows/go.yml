@@ -1,0 +1,21 @@
+---
+name: CICD
+on:
+  push:
+    branches:
+    — master
+  pull-request:
+    branches:
+    — master
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps: 
+    - uses: actions/checkout@v2
+    - name: Setup Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '>=1.17.0'
+    - name: Build winca binary
+      run: go build .
+
