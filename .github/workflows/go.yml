@@ -17,4 +17,4 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: linux
         goarch: amd64
-        release-tag: devel
+        release_tag: devel
