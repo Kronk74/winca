@@ -20,5 +20,5 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
-        goarch: ${{ matric.goarch }}
+        goarch: ${{ matrix.goarch }}
         release_tag: devel
